@@ -4,8 +4,9 @@
 #include <string.h>
 #include <fcntl.h>
 #include <time.h>  //necesar pt functia list_treasures
-#include <errno.h>
+#include <errno.h> //pentru a avea acces la codurile de eroare setate de sistem, atunci când o funcție de sistem esueaza
 #include <stdlib.h>  //necesar pt ca folosesc atoi in main()
+#include <signal.h>   //pentru semnale
 
 #define USERNAME_MAX 32
 #define CLUE_MAX 128
@@ -27,22 +28,22 @@ typedef struct {
 void log_operation(const char *hunt_id, const char *message) {
     char path[MAX_PATH];
     snprintf(path, sizeof(path), "%s/%s", hunt_id, LOG_FILE);
-    int fd = open(path, O_WRONLY | O_APPEND | O_CREAT, 0644);
+    int fd = open(path, O_WRONLY | O_APPEND | O_CREAT, 0644);    //fisierul text de log  nu e unul executabil
     if (fd < 0) return;
     write(fd, message, strlen(message));
-    write(fd, "\n", 1);
+    write(fd, "\n", 1);  //pt o mai buna lizibilitate
     close(fd);
 
     char symlink_name[MAX_PATH];
     snprintf(symlink_name, sizeof(symlink_name), "logged_hunt-%s", hunt_id);
-    unlink(symlink_name); // șterge dacă deja există
-    symlink(path, symlink_name);  //creaza un link simbolic
+    unlink(symlink_name); // șterge dacă deja există (sterge un link simbolic existent)
+    symlink(path, symlink_name);  //creaza un link simbolic catre fisierul de log real(path)
 }
 
 
 
 void adauga_comoara(const char *hunt_id){
-   mkdir(hunt_id,0755);
+   mkdir(hunt_id,0755);     //aici se creaza un nou director numit hunt_id in directorul curent(permisiuni 0755)
 
    Treasure t;
    printf("ID comoară: ");   scanf("%d", &t.treasure_id);
@@ -60,35 +61,40 @@ void adauga_comoara(const char *hunt_id){
    printf("Valoare: "); scanf("%d", &t.value);
 
 
-   char path[MAX_PATH];
+   char path[MAX_PATH];  //crearea caii pt fisierul de comori
    snprintf(path, sizeof(path), "%s/%s", hunt_id, TREASURE_FILE);
 
-   int fd = open(path, O_WRONLY | O_APPEND | O_CREAT, 0644);
+   int fd = open(path, O_WRONLY | O_APPEND | O_CREAT, 0644); //fd-file descriptor(nr intreg) - reprezinta fisierul deschis
+   /*O_WRONLY: deschide fișierul pentru scriere (nu citire).
+     O_APPEND: orice scriere se face la finalul fișierului (append mode).
+     O_CREAT: dacă fișierul nu există, va fi creat.*/
    if (fd < 0) { perror("Eroare la deschidere"); return; }
 
-   write(fd, &t, sizeof(Treasure));
+   write(fd, &t, sizeof(Treasure));   //scrie in fis fd continutul lui t
    close(fd);
 
    char log[256];
    snprintf(log, sizeof(log), "Adăugată comoara %d de %s", t.treasure_id, t.username);
-   log_operation(hunt_id, log);
+   log_operation(hunt_id, log);   //logarea operatiunii in fisierul log - pt a pastra o urma a actiunilor
 }
 
 
 
 void list_treasures(const char *hunt_id) {
     char path[MAX_PATH];
-    snprintf(path, sizeof(path), "%s/%s", hunt_id, TREASURE_FILE);
+    snprintf(path, sizeof(path), "%s/%s", hunt_id, TREASURE_FILE);  //construim calea catre fisierul cu comori
 
-    int fd = open(path, O_RDONLY);
+    int fd = open(path, O_RDONLY);   //se deschide fisierul path
     if (fd < 0) { perror("open"); return; }
 
     struct stat st;
-    stat(path, &st);
+    stat(path, &st);    /*functia stat() se folosește pentru a obține informații despre fișierul specificat prin path
+		        și le stochează în structura st.*/
 
     printf("Hunt: %s\n", hunt_id);
-    printf("File size: %ld bytes\n", st.st_size);
-    printf("Last modified: %s", ctime(&st.st_mtime));
+    printf("File size: %ld bytes\n", st.st_size); //dimensiunea fisierului in octeti
+    printf("Last modified: %s", ctime(&st.st_mtime)); /*ctime() converteste timpul ultimei modificari a fisierului
+							(st.st_mtime) intr-un sir de caractere in format lizibil*/
 
     Treasure t;
     while (read(fd, &t, sizeof(Treasure)) == sizeof(Treasure)) {
@@ -132,9 +138,10 @@ void remove_treasure(const char *hunt_id, int id) {
     int fd = open(path, O_RDONLY);
     if (fd < 0) { perror("open"); return; }
 
-    int temp_fd = open("temp.dat", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int temp_fd = open("temp.dat", O_WRONLY | O_CREAT | O_TRUNC, 0644);  //O_TRUNC goleste fisierul daca deja exista
     if (temp_fd < 0) { perror("temp open"); close(fd); return; }
-
+    //acest fisier temporar va conține toate comorile, cu excepția celei pe care vrem să o ștergem.
+    
     Treasure t;
     int found = 0;
     while (read(fd, &t, sizeof(Treasure)) == sizeof(Treasure)) {
@@ -162,21 +169,59 @@ void remove_treasure(const char *hunt_id, int id) {
 
 void remove_hunt(const char *hunt_id) {
     char path[MAX_PATH];
-    snprintf(path, sizeof(path), "%s/%s", hunt_id, TREASURE_FILE);
-    unlink(path);
-    snprintf(path, sizeof(path), "%s/%s", hunt_id, LOG_FILE);
-    unlink(path);
-    rmdir(hunt_id);
+    snprintf(path, sizeof(path), "%s/%s", hunt_id, TREASURE_FILE);  //se formeaza calea catre fisierul cu comori
+    unlink(path);   //sterge fisierul treasures.dat
+    snprintf(path, sizeof(path), "%s/%s", hunt_id, LOG_FILE);  //se formeaza calea catre fisierul de log
+    unlink(path);  //sterge fisierul de log
+    rmdir(hunt_id); /*Această funcție șterge directorul doar dacă este gol. Asta e motivul pentru care fișierele din el
+		      au fost eliminate anterior.*/
 
     char link_path[MAX_PATH];
     snprintf(link_path, sizeof(link_path), "logged_hunt-%s", hunt_id);
-    unlink(link_path);
+    unlink(link_path);  //se șterge linkul simbolic asociat logului
 
     printf("Removed hunt %s\n", hunt_id);
 }
 
 
+
+// Funcție de tratat semnalele (SIGUSR1, SIGUSR2, SIGUSR3)
+void signal_handler(int sig, siginfo_t *info, void *context) {
+    const char *hunt_id = info->si_value.sival_ptr;
+    int id;
+    
+    switch (sig) {
+        case SIGUSR1:
+            list_treasures(hunt_id);
+            break;
+        case SIGUSR2:
+            id = info->si_value.sival_int;
+            view_treasure(hunt_id, id);
+            break;
+        case SIGTERM:
+            printf("Terminating monitor...\n");
+            exit(0);
+            break;
+        default:
+            printf("Unknown signal received.\n");
+    }
+}
+
+
+
+
 int main(int argc,char *argv[]){
+
+  //initializare handler semnale
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_sigaction = signal_handler;
+  sa.sa_flags = SA_SIGINFO;
+  sigaction(SIGUSR1, &sa, NULL);
+  sigaction(SIGUSR2, &sa, NULL);
+  sigaction(SIGTERM, &sa, NULL);
+
+  printf("Treasure Manager (Monitor) started with PID: %d\n", getpid());
 
   if (argc < 3) {
         printf("Usage:\n  --add <hunt>\n  --list <hunt>\n  --view <hunt> <id>\n  --remove_treasure <hunt> <id>\n  --remove_hunt <hunt>\n");
@@ -197,6 +242,9 @@ int main(int argc,char *argv[]){
         fprintf(stderr, "Invalid command.\n");
     }
 
+    while (1) {
+        pause();  // Așteptăm semnale
+    }
   
   return 0;
 }
